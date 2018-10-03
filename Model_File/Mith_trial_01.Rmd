@@ -1,0 +1,666 @@
+---
+title: "MiTH"
+author: "Abhishek_Shetty"
+date: "September 1, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(scipen = 999)
+
+rm(list = ls(all = TRUE))
+```
+
+
+```{r}
+
+library(DMwR)
+library(infotheo)
+library(vegan)
+library(randomForest)
+library(caret)
+library(ROCR)
+library(e1071)
+library(corrplot)
+library(car)
+library(standardize)
+library(tidyverse)
+library(ggplot2)
+library(glmnet)
+library(rpart)
+library(rpart.plot)
+library(RANN)
+library(zoo)
+library(xgboost)
+library(dplyr)
+
+
+```
+
+
+
+#REad the data from the file 
+```{r}
+
+patient_data<- read.csv("Patientdata.csv",header = TRUE)
+diagnosis_data<- read.csv("Diagnosisdata.csv" , header = TRUE)
+hospital_data<- read.csv("Hospitaldata.csv" , header = TRUE)
+
+
+```
+
+
+
+
+```{r}
+str(patient_data)
+str(hospital_data)
+str(diagnosis_data)
+```
+
+
+
+
+
+```{r}
+
+
+table(patient_data$istrain)
+table(hospital_data$istrain)
+table(diagnosis_data$istrain)
+```
+
+
+
+#using merge to combine columns
+```{r}
+
+data_01<- merge(patient_data , hospital_data , by= c("patientID" , "istrain"))
+View(data_01)
+
+str(data_01)
+```
+
+
+
+```{r}
+
+master_data<- merge(data_01 , diagnosis_data , by = c("patientID" , "istrain"))
+
+str(master_data)
+
+```
+
+
+
+```{r}
+
+summary(master_data)
+#View(master_data)
+
+str(master_data)
+colSums(is.na(master_data))
+
+```
+
+
+
+
+
+```{r}
+#Convert Admission_date and Discharge_date to Date
+
+
+str(master_data)
+
+master_data$Admission_date <- as.Date(master_data$Admission_date)
+
+master_data$Discharge_date <- as.Date(master_data$Discharge_date)
+
+str(master_data)
+
+number_of_days<- master_data$Discharge_date - master_data$Admission_date
+
+
+View(number_of_days)
+
+number_of_days<- as.integer(number_of_days)
+
+master_data<- cbind(number_of_days , master_data)
+
+
+master_data$Admission_date<- NULL
+
+master_data$Discharge_date<- NULL
+
+str(master_data)
+
+```
+
+
+
+
+
+
+
+
+#Since Target variables have NA values  separate Train data and test data
+
+#Separate Train and test data
+```{r}
+
+main_data<- subset.data.frame(x = master_data , master_data$istrain==1 )
+
+str(main_data)
+View(main_data)
+
+table(main_data$Target)
+
+
+
+
+test_data<- subset.data.frame(x = master_data,master_data$istrain == 0)
+
+
+str(test_data)
+View(test_data)
+
+```
+
+
+#Dropping unrelated columns
+```{r}
+
+main_data$weight<- NULL
+test_data$weight<- NULL
+
+test_data$Target<- NULL
+test_data$istrain<- NULL
+main_data$istrain<- NULL
+
+```
+
+
+
+
+```{r}
+
+table(main_data$Target)
+
+main_data$Target<- ifelse(main_data$Target == "No" , 0 , 1)
+
+View(main_data)
+
+
+```
+
+
+
+
+
+
+#Operations on Main data
+```{r}
+str(main_data)
+
+main_data$AdmissionID<- as.integer(main_data$AdmissionID)
+test_data$AdmissionID<- as.integer(test_data$AdmissionID)
+
+
+num_attr<- c("admission_type_id" , "admission_source_id", "num_procedures" , "num_medications" , "num_diagnoses" , "AdmissionID", "number_of_days")
+
+
+
+cat_attr<- main_data[,!names(main_data)%in% c((main_data[num_attr]),"patientID" , "Target" , "number_of_days")]
+
+
+
+colnames(cat_attr)
+
+```
+
+
+
+
+
+
+#plotting corelation
+```{r}
+
+
+
+lapply(main_data[num_attr] , class)
+
+res <- cor(main_data[num_attr], use = "complete.obs")
+
+corrplot(res,  
+         tl.col = "black",number.cex = 0.6, cl.cex = 0.7,tl.cex = 0.7,method = "number")
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+#Traina and test split data from Main data
+
+```{r}
+
+
+str(main_data)
+
+library(caret)
+
+set.seed(786)
+
+train_rows<- createDataPartition(main_data$Target,p=0.7,list=F)
+
+train_data <- main_data[train_rows,]
+
+val_data <- main_data[-train_rows,]
+
+
+
+```
+
+```{r}
+
+library(class)
+library(DMwR)
+
+
+#train_data$patientID<- NULL
+#val_data$patientID<- NULL
+
+
+
+target <- train_data$Target
+val_data_target <- val_data$Target
+
+val_data$Target <- NULL
+train_data$Target <- NULL
+
+
+
+
+
+train_Data <- centralImputation(data = train_data)
+sum(is.na(train_Data))
+val_Data <- centralImputation(data = val_data)
+sum(is.na(val_Data))
+
+
+
+
+#Combining train data imputed and target before building model
+train_Data <- data.frame(train_Data,target)
+str(train_Data)
+sum(is.na(train_Data))
+
+
+
+val_Data<- data.frame(val_Data , target = val_data_target)
+
+str(val_Data)
+sum(is.na(val_Data))
+
+
+```
+
+
+
+
+#By removing columns with 1 factor levels 
+```{r}
+str(train_Data)
+
+
+train_Data$acetohexamide<- NULL
+train_Data$metformin.rosiglitazone<- NULL
+val_Data$acetohexamide<- NULL
+val_Data$metformin.rosiglitazone<- NULL
+
+
+sum(is.na(train_Data))
+
+str(train_Data)
+
+
+train_Data$patientID<- NULL
+val_Data$patientID<- NULL
+
+
+```
+
+
+
+
+```{r}
+##########Standardize the Train and Validation Data-Continuous Variables###########
+
+#std_obj<- preProcess(x = train_Data[, !colnames(train_Data) %in% c("target")],
+                      #method = c("center", "scale"))
+
+#train_std_Data <- predict(std_obj, train_Data)
+
+
+#sum(is.na(train_std_Data))
+
+
+
+#val_std_Data <- predict(std_obj, val_Data)
+
+
+#sum(is.na(val_std_Data))
+
+
+#####################Dummify the Categorical Variables############################
+
+#dummy_obj <- dummyVars( ~ . , train_std_Data)
+
+#train_dummy_Data <- as.data.frame(predict(dummy_obj, train_std_Data))
+
+
+#sum(is.na(train_dummy_Data))
+
+
+#val_dummy_Data <- as.data.frame(predict(dummy_obj, val_std_Data))
+
+
+#sum(is.na(val_dummy_Data))
+
+```
+
+
+
+
+
+#Build First Base model
+
+```{r}
+
+table(val_Data)
+
+
+
+library(e1071)
+
+model_nb <- naiveBayes(train_Data$target~.,train_Data)
+
+#print(model_nb)
+
+
+```
+
+```{r}
+
+preds <- predict(model_nb, val_Data)
+
+
+confusionMatrix(as.factor(preds), as.factor(val_Data$target))
+
+
+```
+
+
+#BUild 2nd base model
+```{r}
+
+log_trial<- glm(train_Data$target~.,data = train_Data,family = binomial)
+
+summary(log_trial)
+
+summary(train_Data)
+
+```
+
+```{r}
+library(MASS)
+library(car)
+
+model_aic <- stepAIC(log_trial, direction = "both")
+
+
+summary(model_aic)
+
+#AIC: 19694
+
+#Number of Fisher Scoring iterations: 11
+
+
+
+
+vif_value <- vif(model_aic)
+
+
+sort(vif_value,decreasing = TRUE)
+
+
+plot(model_aic)
+
+```
+
+
+
+
+```{r}
+prob_trial<- predict(model_aic)
+
+preds <- prediction(prob_trial,train_Data$target)
+
+perf_auct <- performance(preds,measure = "auc")
+
+perf_auct@y.values[[1]]
+
+perf <- performance(preds,measure = "tpr",x.measure = "fpr")
+
+plot(perf,col=rainbow(10),colorize=T,print.cutoffs.at=seq(0,1,0.5))
+
+```
+
+
+
+
+```{r}
+prob_val <- predict(model_aic,newdata = val_Data,type = "response")
+
+preds_val <- ifelse(prob_val>0.3,1,0)
+
+
+
+
+
+
+```
+
+
+```{r}
+
+cm_test = table("actual"=val_Data$target, "predicted"=preds_val)
+accu_Test= sum(diag(cm_test))/sum(cm_test)
+
+cm_test  
+accu_Test
+
+#26%
+
+
+```
+
+
+```{r}
+
+str(test_data)
+
+
+test_Data<- centralImputation(data = test_data)
+
+sum(is.na(test_Data))
+
+
+```
+
+
+
+
+
+```{r}
+
+prob_test <- predict(model_aic,newdata = test_Data,type = "response")
+
+preds_test <- ifelse(prob_test>0.3,1,0)
+
+
+
+```
+
+
+
+```{r}
+
+final_data <-cbind(test_Data,preds_test)
+
+str(final_data)
+
+final_data$preds_test<- ifelse(final_data$preds_test == 0 , "No", "Yes")
+
+final_data
+
+
+```
+
+```{r}
+
+library(xlsx)
+
+getwd()
+
+
+write.csv(final_data, "submission_01.csv")
+
+
+#BAse model Accuracy achieved- 63.86%
+
+```
+
+
+
+```{r}
+
+# Convert data into an object of the class "xgb.Dmatrix"
+
+
+dummy_obj <- dummyVars( ~ . , train_Data)
+
+train_dummy_Data <- as.data.frame(predict(dummy_obj, train_Data))
+
+val_dummy_Data <- as.data.frame(predict(dummy_obj, val_Data))
+
+
+
+
+train_matrix <- xgb.DMatrix(data = as.matrix(train_dummy_Data[, !(names(train_dummy_Data) %in% c("target"))]), 
+                            label = as.matrix(train_dummy_Data[, names(train_dummy_Data) %in% "target"]))
+
+val_matrix <- xgb.DMatrix(data = as.matrix(val_dummy_Data[, !(names(val_dummy_Data) %in% c("target"))]), 
+                           label = as.matrix(val_dummy_Data[,names(val_dummy_Data) %in% "target"]))
+
+
+
+
+
+
+```
+
+
+
+```{r}
+
+##Define parameter list
+params_list <- list("objective" = "binary:logistic",
+                    "eta" = 0.1,
+                    "early_stopping_rounds" = 10,
+                    "max_depth" = 6,
+                    "gamma" = 0.5,
+                    "colsample_bytree" = 0.6,
+                    "subsample" = 0.65,
+                    "eval_metric" = "auc",
+                    "silent" = 1)
+
+
+```
+
+
+
+```{r}
+
+#Build the model
+
+xgb_model_with_params <- xgboost(data = train_matrix, params = params_list, nrounds = 500, early_stopping_rounds = 20)
+
+
+
+```
+
+
+
+```{r}
+
+#Predict on validation data
+
+prob_val <- predict(xgb_model_with_params, val_matrix,type="response", norm.votes=TRUE) 
+
+
+
+```
+
+
+
+```{r}
+
+#Plot ROC and AUC 
+
+pred <- prediction(prob_val,val_dummy_Data$target)
+perf <- performance(pred, measure = "tpr", x.measure ="fpr")
+
+plot(perf,col = rainbow(10),colorize = T,print.cutoffs.at= seq(0,1,0.2))
+auc <- performance(pred,measure = "auc")
+auc@y.values[[1]]
+pred_val <- ifelse(prob_val > 0.3 , 1,0)
+
+
+
+
+
+```
+
+
+
+```{r}
+#Confusion Matrix and Error Metrics
+
+confusionMatrix(as.factor(pred_val), as.factor(val_dummy_Data$target))
+
+
+
+```
+
+
+
+```{r}
+
+#Choose the cutoff point from above and Predict on Test data
+
+prob_test <- predict(xgb_model_with_params,as.matrix(test_Data),type="response",norm.votes=TRUE) 
+
+
+```
+
